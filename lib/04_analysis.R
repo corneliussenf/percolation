@@ -92,7 +92,6 @@ analytical_solution_plot <- expand.grid(
   )
 
 p0b <- ggplot() +
-  theme_classic() +
   labs(
     x = bquote("Disturbance rate ("*lambda*"; %"~yr^-1*")"),
     y = bquote("Gap expansion probability ("*p[g]*")"),
@@ -101,6 +100,7 @@ p0b <- ggplot() +
     linetype = NULL,
     title = bquote("Recovery period ("*r*"):")
   ) +
+  theme_classic() +
   theme(
     plot.title = element_text(size = 9),
     axis.text = element_text(size = 8),
@@ -163,7 +163,6 @@ dat_full_summary <- read_csv("data/dat_full_summary.csv")
 dat_natural_full_summary <- read_csv("data/dat_natural_full_summary.csv")
 dat_harvest_full_summary <- read_csv("data/dat_harvest_full_summary.csv")
 disturbance_summary <- read_csv("data/disturbance_summary_1985_2023.csv")
-disturbance_summary_change <- read_csv("data/disturbance_summary_change.csv")
 forest_matrix <- read_csv("data/forest_matrix.csv")
 simulations <- read_csv("results/simulations.csv")
 country_intersection <- read_csv("data/gridcell_country.csv")
@@ -381,7 +380,7 @@ pred_emp_harvest$dr <- seq(0, max(expansion_rates_all$rate, na.rm = TRUE), 0.001
 pred_emp <- list(
   pred_emp_natural,
   pred_emp_harvest
-) %>%
+  ) %>%
   bind_rows()
 
 simulations_summary <- simulations %>%
@@ -1138,6 +1137,18 @@ exp_model <- function(data, y_name, dr_name = "rate") {
   return(model)
 }
 
+powerlaw_model <- function(data, y_name, dr_name = "rate") {
+  data$y <- data[, y_name][[1]]
+  data$rate <- data[, dr_name][[1]]
+  start <- list(a = min(data$y), b = 0.1)
+  model <- nls(y ~ I(a * rate^b), 
+               data = data, 
+               start = start, 
+               weights = forest_px_sum
+  )
+  return(model)
+}
+
 logit_model <- function(data, y_name, dr_name = "rate") {
   data$y <- data[, y_name][[1]]
   data$rate <- data[, dr_name][[1]]
@@ -1218,16 +1229,19 @@ logit.model <- logit_model(
     ), 
   y_name = "patch_size_mn")
 
-AIC(lin.model, exp.model, logit.model)
+powerlaw.model <- powerlaw_model(
+  dat_harvest_summary_subset_plot %>%
+    filter(
+      expansion == 1
+    ), 
+  y_name = "patch_size_mn")
 
-broom::tidy(exp.model)
-broom::glance(exp.model)
+AIC(lin.model, exp.model, logit.model, powerlaw.model)
 
-broom::tidy(logit.model)
-broom::glance(logit.model)
-
-broom::tidy(lin.model)
-broom::glance(lin.model)
+estimates_harvest <- broom::tidy(logit.model) %>%
+  mutate(
+    agent = "harvest"
+  )
 
 saturation_point_harvest <- coef(logit.model)["a"]
 
@@ -1312,16 +1326,19 @@ logit.model <- logit_model(
     ), 
   y_name = "patch_size_mn")
 
-AIC(lin.model, exp.model, logit.model)
+powerlaw.model <- powerlaw_model(
+  dat_natural_summary_subset_plot %>%
+    filter(
+      expansion == 1
+    ), 
+  y_name = "patch_size_mn")
 
-broom::tidy(exp.model)
-broom::glance(exp.model)
+AIC(lin.model, exp.model, logit.model, powerlaw.model)
 
-broom::tidy(logit.model)
-broom::glance(logit.model)
-
-broom::tidy(lin.model)
-broom::glance(lin.model)
+estimates_natural <- broom::tidy(exp.model) %>%
+  mutate(
+    agent = "natural"
+  )
 
 final_model <- exp.model
 
@@ -1338,6 +1355,13 @@ model.df.natural <- cbind(
                       interval = "conf"
   )
 )
+
+list(
+  estimates_harvest,
+  estimates_natural
+  ) %>%
+  bind_rows() %>%
+  write_csv("temp/estimates.csv")
 
 # Joint plot
 
@@ -1604,10 +1628,12 @@ plotdat <- forest_matrix %>%
   )
 
 plotdat_nona <- plotdat %>% 
-  filter(forest_share >= 0.1) %>%
   filter(rate > 0)
 
 # Size
+fit_area.log0 <- lm((value) ~ (rate) * forest_area_cut, 
+                    data = plotdat_nona %>% filter(name %in% c("area_mn")),
+                    weights = forest_px_sum)
 fit_area.log1 <- lm(log(value) ~ (rate) * forest_area_cut, 
                     data = plotdat_nona %>% filter(name %in% c("area_mn")),
                     weights = forest_px_sum)
@@ -1615,7 +1641,7 @@ fit_area.log2 <- lm(log(value) ~ log(rate) * forest_area_cut,
                     data = plotdat_nona %>% filter(name %in% c("area_mn")),
                     weights = forest_px_sum)
 
-AIC(fit_area.log1, fit_area.log2)
+AIC(fit_area.log0, fit_area.log1, fit_area.log2)
 
 fit_area.log.df <- expand_grid(
   rate = seq(0.002, 0.05, length.out = 100),
@@ -1624,11 +1650,14 @@ fit_area.log.df <- expand_grid(
   forest_area_cut = unique(plotdat_nona$forest_area_cut)
   #forest_px_sum = mean(plotdat_nona$forest_px_sum)
 )
-fit_area.log.df$pred = predict(fit_area.log1, newdata = fit_area.log.df, se.fit = TRUE, interval = "prediction")$fit[, 1]
-fit_area.log.df$pred_lower = predict(fit_area.log1, newdata = fit_area.log.df, se.fit = TRUE, interval = "confidence")$fit[, 2]
-fit_area.log.df$pred_upper = predict(fit_area.log1, newdata = fit_area.log.df, se.fit = TRUE, interval = "confidence")$fit[, 3]
+fit_area.log.df$pred = predict(fit_area.log2, newdata = fit_area.log.df, se.fit = TRUE, interval = "prediction")$fit[, 1]
+fit_area.log.df$pred_lower = predict(fit_area.log2, newdata = fit_area.log.df, se.fit = TRUE, interval = "confidence")$fit[, 2]
+fit_area.log.df$pred_upper = predict(fit_area.log2, newdata = fit_area.log.df, se.fit = TRUE, interval = "confidence")$fit[, 3]
 
 # Number of patches
+fit_np.log0 <- lm((value / 100^2) ~ (rate) * forest_area_cut, 
+                  data = plotdat_nona %>% filter(name %in% c("np")),
+                  weights = forest_px_sum)
 fit_np.log1 <- lm(log(value / 100^2) ~ (rate) * forest_area_cut, 
                   data = plotdat_nona %>% filter(name %in% c("np")),
                   weights = forest_px_sum)
@@ -1636,7 +1665,7 @@ fit_np.log2 <- lm(log(value / 100^2) ~ log(rate) * forest_area_cut,
                   data = plotdat_nona %>% filter(name %in% c("np")),
                   weights = forest_px_sum)
 
-AIC(fit_np.log1, fit_np.log2)
+AIC(fit_np.log0, fit_np.log1, fit_np.log2)
 
 fit_np.log.df <- expand_grid(
   rate = seq(0.002, 0.05, length.out = 100),
@@ -1645,11 +1674,14 @@ fit_np.log.df <- expand_grid(
   forest_area_cut = unique(plotdat_nona$forest_area_cut)
   #forest_px_sum = mean(plotdat_nona$forest_px_sum)
 )
-fit_np.log.df$pred = predict(fit_np.log1, newdata = fit_np.log.df, se.fit = TRUE, interval = "confidence")$fit[, 1]
-fit_np.log.df$pred_lower = predict(fit_np.log1, newdata = fit_np.log.df, se.fit = TRUE, interval = "confidence")$fit[, 2]
-fit_np.log.df$pred_upper = predict(fit_np.log1, newdata = fit_np.log.df, se.fit = TRUE, interval = "confidence")$fit[, 3]
+fit_np.log.df$pred = predict(fit_np.log2, newdata = fit_np.log.df, se.fit = TRUE, interval = "confidence")$fit[, 1]
+fit_np.log.df$pred_lower = predict(fit_np.log2, newdata = fit_np.log.df, se.fit = TRUE, interval = "confidence")$fit[, 2]
+fit_np.log.df$pred_upper = predict(fit_np.log2, newdata = fit_np.log.df, se.fit = TRUE, interval = "confidence")$fit[, 3]
 
 # Aggregation
+fit_ai.log0 <- lm((value) ~ (rate) * forest_area_cut, 
+                  data = plotdat_nona %>% filter(name %in% c("ai")),
+                  weights = forest_px_sum)
 fit_ai.log1 <- lm(log(value) ~ (rate) * forest_area_cut, 
                   data = plotdat_nona %>% filter(name %in% c("ai")),
                   weights = forest_px_sum)
@@ -1657,7 +1689,7 @@ fit_ai.log2 <- lm(log(value) ~ log(rate) * forest_area_cut,
                   data = plotdat_nona %>% filter(name %in% c("ai")),
                   weights = forest_px_sum)
 
-AIC(fit_ai.log1, fit_ai.log2)
+AIC(fit_ai.log0, fit_ai.log1, fit_ai.log2)
 
 fit_ai.log.df <- expand_grid(
   rate = seq(0.002, 0.05, length.out = 100),
@@ -1668,6 +1700,21 @@ fit_ai.log.df <- expand_grid(
 fit_ai.log.df$pred = predict(fit_ai.log1, newdata = fit_np.log.df, se.fit = TRUE, interval = "confidence")$fit[, 1]
 fit_ai.log.df$pred_lower = predict(fit_ai.log1, newdata = fit_np.log.df, se.fit = TRUE, interval = "confidence")$fit[, 2]
 fit_ai.log.df$pred_upper = predict(fit_ai.log1, newdata = fit_np.log.df, se.fit = TRUE, interval = "confidence")$fit[, 3]
+
+# Estimates
+
+list(
+    broom::tidy(fit_area.log2),
+    broom::tidy(fit_np.log2),
+    broom::tidy(fit_ai.log1)
+  ) %>%
+  set_names(
+    c("area", "np", "ai")
+  ) %>%
+  bind_rows(
+    .id = "predictor"
+  ) %>%
+  write_csv("temp/estimates.csv")
 
 # Plots
 p_area <- ggplot() +
@@ -1973,7 +2020,6 @@ p_ai_clean <- ggplot() +
   labs(
     x = bquote("Disturbance rate (%"~yr^-1*")"),
     y = "Aggregation index (%)",
-    #y = "%",
     col = "Forest cover"
   ) +
   scale_color_manual(
@@ -2011,6 +2057,8 @@ p_np + theme(legend.position = "none") +
     tag_suffix = ")"
   )
 
+ggsave("results/extended_figure03.pdf", width = 7.5, height = 7.5)
+
 p_area_clean + theme(legend.position = "none") +
   p_np_clean + theme(legend.position = "none") +
   p_ai_clean +
@@ -2023,73 +2071,6 @@ p_area_clean + theme(legend.position = "none") +
   )
 
 ggsave("results/figure03.pdf", width = 7.3 / 3 * 3, height = 7.5 / 3)
-
-dat_core_np_area <- plotdat_nona  %>%
-  filter(
-    name == "area"
-  ) %>%
-  select(
-    gridid,
-    area = value,
-    forest_px_sum,
-    forest_area_cut,
-    rate
-  ) %>%
-  left_join(
-    plotdat_nona  %>%
-      filter(
-        name == "np"
-      ) %>%
-      select(
-        gridid,
-        np = value,
-        forest_px_sum,
-        forest_area_cut,
-        rate
-      )
-  ) %>%
-  left_join(
-    plotdat_nona  %>%
-      filter(
-        name == "ai"
-      ) %>%
-      select(
-        gridid,
-        ai = value,
-        forest_px_sum,
-        forest_area_cut,
-        rate
-      )
-  )
-
-plotdat %>%
-  mutate(
-    forest_area_cut = cut(
-      forest_px_sum,
-      c(c(0, 0.2, 0.6) * 100^2 / 9e-04, max(forest_px_sum)),
-      include.lowest = TRUE,
-      labels = c("0-40%", "20-60%", ">60%")
-    )
-  ) %>%
-  group_by(
-    name,
-    forest_area_cut,
-    rate_cutoff = rate > 0.015
-  ) %>%
-  summarize(
-    n = n(),
-    min = min(value, na.rm = TRUE),
-    max = max(value, na.rm = TRUE),
-    mn = mean(value, na.rm = TRUE),
-    sd = sd(value, na.rm = TRUE),
-    se = sd / sqrt(n)
-  ) %>%
-  filter(
-    name %in% c("area", "np")
-  ) %>%
-  View()
-
-pl
 
 # Maps ----
 

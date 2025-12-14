@@ -228,47 +228,94 @@ dat_simulations <- dat %>%
 write_csv(dat_simulations, "results/simulations.csv")
 dat_simulations <- read_csv("results/simulations.csv")
 
-dat_landscapemetrics <- dat %>%
-  map(
-    ., ~ .[[2]]
+dat_simulations_plot <- dat_simulations %>%
+  filter(
+    iteration == 1
   ) %>%
-  map(
-    ., ~ bind_rows(.)
-  ) %>%
-  bind_rows(
-    .id = "iteration"
+  filter(
+    p_nodist == 0,
+    p_forest == 0.7,
+    dr %in% sample(unique(dat_simulations$dr), 5)
   )
-
-write_csv(dat_landscapemetrics, "results/simulations_landscapemetrics.csv")
-dat_landscapemetrics <- read_csv("results/simulations_landscapemetrics.csv")
 
 ggplot(
-  data = dat_simulations %>%
-    filter(
-      year > r
-    ) %>%
-    sample_n(
-      1000
-    )
-) +
-  geom_point(
+  data = dat_simulations_plot
+  ) +
+  geom_area(
+    data = data.frame(
+      x = c(0, 0, 30 ,30),
+      y = c(0, 1, 1, 0)
+    ),
     aes(
-      x = as.double(dr),
-      y = as.double(dr_real)
+      x = x,
+      y = y
+    ),
+    fill = "darkgrey",
+    alpha = 0.75
+  ) +
+  geom_line(
+    aes(
+      x = year,
+      y = p,
+      col = dr * 100,
+      group = dr
     )
   ) +
-  geom_abline(
-    intercept = 0,
-    slope = 1
+  labs(
+    x = "Simulation year",
+    y = bquote("Gap expansion probability ("*p[g]*")"),
+    col = bquote("Disturbance rate ("*lambda*"; %"~yr^-1*")"),
+    fill = NULL,
+    linetype = NULL
+  ) +
+  theme_classic() +
+  theme(
+    plot.title = element_text(size = 9),
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 9),
+    strip.background = element_blank(),
+    legend.position = c(1, 0),
+    legend.justification = c(1, 0),
+    legend.background = element_blank(),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.height = unit(0.2, "cm"),
+    legend.key.width = unit(0.5, "cm"),
+    legend.spacing = unit(-0.25, "cm")
+  ) +
+  scale_color_viridis_c() +
+  guides(
+    col = guide_colorbar(
+      direction = "horizontal",
+      title.position = "top",
+      title.hjust = 0.5
+    )
+  ) +
+  geom_segment(
+    data = dat_simulations_plot %>%
+      filter(
+        year > r
+      ) %>%
+      group_by(
+        dr
+      ) %>%
+      summarise(
+        pm = mean(p, na.rm = TRUE)
+      ),
+    aes(
+      x = 30,
+      xend = 160,
+      y = pm,
+      yend = pm,
+      col = dr * 100
+    ),
+    alpha = 0.5
   )
 
-A_star <- function(lambda, r, N) {
-  (r * lambda * N) / (1 + r * lambda)
-}
+ggsave("results/extended_figure04.pdf", width = 3.5, height = 3.5)
 
-P_exact <- function(lambda, r, N) {
-  A <- A_star(lambda, r, N)
-  1 - (1 - 8/N)^A
+P_adj_analytical <- function(lambda, r, k = 8) {
+  1 - (1 / (1 + r * lambda))^k
 }
 
 ggplot(
@@ -306,7 +353,7 @@ ggplot(
   geom_line(
     data = data.frame(
       dr0 = seq(0, 0.05, length.out = 100),
-      p0 = P_exact(seq(0, 0.05, length.out = 100), r = 30, N = (1000000/30)^2)
+      p0 = P_adj_analytical(seq(0, 0.05, length.out = 100), r = 30)
     ),
     aes(
       x = dr0 * 100,
@@ -315,162 +362,5 @@ ggplot(
     linetype = "dashed"
   )
 
-ggplot(
-  data = dat_simulations %>%
-    filter(
-      year > 30
-    ) %>%
-    group_by(
-      p_forest,
-      dr,
-      cluster,
-      p_nodist
-    ) %>%
-    summarize(
-      p = mean(p, na.rm = TRUE)
-    ) %>%
-    group_by(
-      dr
-    ) %>%
-    summarise(
-      p_mn = mean(p, na.rm = TRUE),
-      p_sd = sd(p, na.rm = TRUE),
-      p_md = median(p, na.rm = TRUE),
-      p_lower = quantile(p, 0.25, na.rm = TRUE),
-      p_upper = quantile(p, 0.75, na.rm = TRUE),
-      p_llower = quantile(p, 0.025, na.rm = TRUE),
-      p_uupper = quantile(p, 0.975, na.rm = TRUE)
-    )
-) +
-  geom_ribbon(
-    aes(
-      x = dr * 100,
-      ymin = p_llower,
-      ymax = p_uupper
-    ),
-    alpha = 0.2
-  ) +
-  geom_ribbon(
-    aes(
-      x = dr * 100,
-      ymin = p_lower,
-      ymax = p_upper
-    ),
-    alpha = 0.2
-  ) +
-  geom_line(
-    aes(
-      x = dr * 100,
-      y = p_mn
-    )
-  ) +
-  labs(
-    x = "Disturbance rate (% per yr.)",
-    y = "Gap grwoth rate",
-    col = "Proportion undisturbed",
-    fill = "Proportion undisturbed"
-  )
-
-dat_simulations %>%
-  group_by(
-    dr,
-    p_nodist,
-    cluster
-  ) %>%
-  summarize() %>%
-  ungroup()
-
-ggplot(
-  data = dat_landscapemetrics
-) +
-  geom_point(
-    aes(
-      x = dr,
-      y = value,
-      col = factor(class)
-    )
-  ) +
-  facet_wrap(
-    ~ metric,
-    scales = "free"
-  )
-
-ggplot(
-  data = dat_landscapemetrics %>%
-    filter(
-      class == 1 & dr < 0.03 & p_nodist == 0
-    ) %>%
-    filter(
-      metric %in% c("area_mn")
-    ) %>%
-    group_by(
-      dr,
-      p_nodist,
-      p_forest,
-      cluster,
-      metric
-    ) %>%
-    summarise(
-      value = mean(value)
-    ) %>%
-    group_by(
-      p_nodist,
-      p_forest,
-      cluster,
-      metric
-    ) %>%
-    mutate(
-      value_stan = (value / min(value))
-    )
-) +
-  geom_point(
-    aes(
-      x = dr,
-      y = value_stan,
-      col = factor(cluster),
-      shape = factor(p_forest)
-    )
-  ) +
-  geom_smooth(
-    aes(
-      x = dr,
-      y = value_stan,
-      col = factor(cluster),
-      group = interaction(cluster, p_forest)
-    ),
-    method = "gam",
-    se = FALSE
-  ) +
-  scale_y_log10()
-
-ggplot(
-  data = dat_landscapemetrics %>%
-    filter(
-      class == 0
-    ) %>%
-    group_by(
-      dr,
-      p_nodist,
-      p_forest,
-      cluster,
-      metric
-    ) %>%
-    summarize(
-      value = mean(value)
-    )
-) +
-  geom_point(
-    aes(
-      x = dr,
-      y = value,
-      col = factor(p_forest),
-      shape = factor(p_nodist),
-      group = factor(cluster)
-    )
-  ) +
-  facet_wrap(
-    ~ metric,
-    scales = "free"
-  )
 
 
